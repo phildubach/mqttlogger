@@ -4,10 +4,11 @@ def main():
     parser = argparse.ArgumentParser(description="MQTT Logger")
     parser.add_argument('-b', '--broker')
     parser.add_argument('-c', '--clear', action='store_true')
-    parser.add_argument('-t', '--topic', action='extend', nargs=1, type=str)
+    parser.add_argument('-t', '--topic', action='append', type=str)
     parser.add_argument('-p', '--port', type=int)
     parser.add_argument('database')
     args = parser.parse_args()
+    print(args)
 
     log = logger.MQTTLogger(args)
     if args.port:
