@@ -7,7 +7,7 @@ retrieving logged messages from a HTTP browser.
 Requirements
 ============
 
-MQTT Logger requires Python 3.4 or later.
+MQTT Logger requires Python 3.5 or later.
 
 Installation
 ============
