@@ -88,7 +88,7 @@ class WebServer(threading.Thread):
         self.app.route('/', callback=self.render_index)
 
     def run(self):
-        self.app.run(port=self.args.port)
+        self.app.run(host='', port=self.args.port)
 
     def render_index(self, db):
         c = db.execute('''SELECT timestamp, topic, payload from messages INNER JOIN topics ON messages.topic_id = topics.id ORDER by messages.id DESC LIMIT 100''')
