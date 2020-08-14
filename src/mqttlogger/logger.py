@@ -1,6 +1,12 @@
+import os.path
+import sqlite3
+import threading
+import time
+
+import bottle
+import bottle.ext.sqlite
+
 import paho.mqtt.client as mqtt
-import sqlite3, argparse, time, threading, bottle, os.path, bottle.ext.sqlite
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
 class Database():
     def __init__(self, args):
@@ -10,8 +16,11 @@ class Database():
             c.execute('''CREATE TABLE IF NOT EXISTS config (key TEXT UNIQUE, value TEXT)''')
             if args.broker:
                 c.execute('''INSERT OR REPLACE INTO config VALUES ('broker', ?)''', (args.broker,))
-            c.execute('''CREATE TABLE IF NOT EXISTS topics (id INTEGER PRIMARY KEY, topic TEXT UNIQUE)''')
-            c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, timestamp INTEGER, topic_id INTEGER, payload BLOB, qos INTEGER, retain INTEGER, FOREIGN KEY(topic_id) REFERENCES topics(id))''')
+            c.execute('CREATE TABLE IF NOT EXISTS topics ('
+                      'id INTEGER PRIMARY KEY, topic TEXT UNIQUE)')
+            c.execute('CREATE TABLE IF NOT EXISTS messages ('
+                      'id INTEGER PRIMARY KEY, timestamp INTEGER, topic_id INTEGER, payload BLOB,'
+                      'qos INTEGER, retain INTEGER, FOREIGN KEY(topic_id) REFERENCES topics(id))')
             if args.clear:
                 c.execute('''DROP TABLE subscriptions''')
             c.execute('''CREATE TABLE IF NOT EXISTS subscriptions (topic TEXT UNIQUE)''')
@@ -28,18 +37,21 @@ class Database():
         return res
 
     def store(self, msg):
-        try: 
+        try:
             c = self.conn.cursor()
             c.execute('''INSERT OR IGNORE INTO topics (topic) VALUES(?)''', (msg.topic,))
             c.execute('''SELECT id FROM topics WHERE topic=?''', (msg.topic,))
             topic_id = c.fetchone()[0]
             if msg.retain:
-                c.execute('''SELECT payload, qos, retain from MESSAGES WHERE topic_id=? ORDER BY id DESC LIMIT 1''', (topic_id,))
+                c.execute('SELECT payload, qos, retain from MESSAGES WHERE topic_id=? '
+                          'ORDER BY id DESC LIMIT 1', (topic_id,))
                 res = c.fetchone()
                 if res and res[0] == msg.payload and res[1] == msg.qos and res[2] == msg.retain:
                     print("Skipping duplicate retained message for topic ", msg.topic)
                     return
-            c.execute('''INSERT INTO messages (timestamp, topic_id, payload, qos, retain) VALUES(?,?,?,?,?)''', (int(time.time()), topic_id, msg.payload, msg.qos, msg.retain))
+            c.execute('INSERT INTO messages (timestamp, topic_id, payload, qos, retain) '
+                      'VALUES(?,?,?,?,?)''', (int(time.time()), topic_id, msg.payload, msg.qos,
+                                              msg.retain))
             self.conn.commit()
         except sqlite3.Error as e:
             print(e)
@@ -62,11 +74,14 @@ class MQTTLogger():
 
         self.db = Database(args)
 
-        self.client = mqtt.Client(userdata=self)
+        client_id = args.client or ""
+        self.client = mqtt.Client(client_id=client_id, userdata=self)
         self.client.on_message = MQTTLogger.on_message_cb
         broker = self.db.config('broker')
         if not broker:
             raise ValueError('Broker address not in database and not specified on command line')
+        if args.user:
+            self.client.username_pw_set(args.user, args.password)
         self.client.connect(broker)
         for topic in self.db.subscriptions():
             print(topic)
@@ -76,20 +91,30 @@ class MQTTLogger():
         self.client.loop_forever()
 
 class WebServer(threading.Thread):
-    
+
     def __init__(self, args, logger):
-        super(WebServer,self).__init__()
+        super(WebServer, self).__init__()
         self.args = args
         self.logger = logger
         self.app = bottle.Bottle()
         plugin = bottle.ext.sqlite.Plugin(dbfile=args.database)
         self.app.install(plugin)
-        bottle.TEMPLATE_PATH = [os.path.join(os.path.dirname(__import__(__name__).__file__),'views')]
-        self.app.route('/', callback=self.render_index)
+        bottle.TEMPLATE_PATH = [os.path.join(os.path.dirname(__import__(__name__).__file__),
+                                             'views')]
+        self.app.route('/', callback=self.render_messages)
+        self.app.route('/messages', callback=self.render_messages)
 
     def run(self):
         self.app.run(host='', port=self.args.port)
 
-    def render_index(self, db):
-        c = db.execute('''SELECT timestamp, topic, payload from messages INNER JOIN topics ON messages.topic_id = topics.id ORDER by messages.id DESC LIMIT 100''')
+    def render_messages(self, db):
+        if bottle.request.query.topicid:
+            c = db.execute('SELECT timestamp, topic_id, topic, payload from messages '
+                           'INNER JOIN topics ON messages.topic_id = topics.id '
+                           'WHERE topic_id=? ORDER by messages.id DESC LIMIT 100',
+                           (int(bottle.request.query.topicid),))
+        else:
+            c = db.execute('SELECT timestamp, topic_id, topic, payload from messages '
+                           'INNER JOIN topics ON messages.topic_id = topics.id '
+                           'ORDER by messages.id DESC LIMIT 100')
         return bottle.template('messages', messages=c.fetchall())
